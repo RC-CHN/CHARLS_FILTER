@@ -4,3 +4,6 @@
 /2018
 /2020
 /processed_data
+build/
+dist/
+pack/
