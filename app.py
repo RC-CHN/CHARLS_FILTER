@@ -9,8 +9,9 @@ class DataFilterApp:
     def __init__(self, root):
         self.root = root
         self.root.title("交互式数据筛选工具 (支持后台加载)")
-        self.root.geometry("800x600")
+        self.root.geometry("900x700")
 
+        self.original_df = None # To store the original data for resetting
         self.df = None
         self.file_path = ""
         self.data_queue = queue.Queue()
@@ -88,6 +89,10 @@ class DataFilterApp:
         self.export_button = ttk.Button(action_frame, text="导出数据...", command=self.open_export_window)
         self.export_button.pack(side=tk.LEFT, padx=5)
         self.export_button.config(state=tk.DISABLED)
+
+        self.reset_button = ttk.Button(action_frame, text="重置所有筛选", command=self.reset_data)
+        self.reset_button.pack(side=tk.RIGHT, padx=10)
+        self.reset_button.config(state=tk.DISABLED)
         
         # --- Status Bar ---
         self.status_bar = ttk.Label(main_frame, text="请先加载数据...", relief=tk.SUNKEN, anchor=tk.W)
@@ -136,6 +141,7 @@ class DataFilterApp:
             status, data = self.data_queue.get_nowait()
 
             if status == "success":
+                self.original_df = data.copy() # Save a copy of the original data
                 self.df = data
                 self.file_label.config(text=os.path.basename(self.file_path))
                 self.update_status_bar()
@@ -143,6 +149,7 @@ class DataFilterApp:
                 self.filter_button.config(state=tk.NORMAL)
                 self.export_button.config(state=tk.NORMAL)
                 self.apply_adv_filter_button.config(state=tk.NORMAL)
+                self.reset_button.config(state=tk.NORMAL)
                 self.adv_filter_col['values'] = self.df.columns.tolist()
                 messagebox.showinfo("加载成功", f"成功加载 {len(self.df)} 条记录和 {len(self.df.columns)} 个变量。")
             elif status == "error":
@@ -152,6 +159,7 @@ class DataFilterApp:
                 self.filter_button.config(state=tk.DISABLED)
                 self.export_button.config(state=tk.DISABLED)
                 self.apply_adv_filter_button.config(state=tk.DISABLED)
+                self.reset_button.config(state=tk.DISABLED)
 
             self.load_button.config(state=tk.NORMAL)
 
@@ -274,6 +282,15 @@ class DataFilterApp:
         except Exception as e:
             messagebox.showerror("筛选失败", f"应用筛选时发生错误:\n{e}")
 
+    def reset_data(self):
+        """Resets the dataframe to its original state after loading."""
+        if self.original_df is None:
+            messagebox.showwarning("无数据", "没有可恢复的原始数据。")
+            return
+        
+        self.df = self.original_df.copy()
+        self.update_status_bar()
+        messagebox.showinfo("重置成功", "数据已恢复到初始加载状态。")
 
     def open_export_window(self):
         if self.df is None:
