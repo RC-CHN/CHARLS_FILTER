@@ -15,6 +15,7 @@ class DataFilterApp:
         self.df = None
         self.file_path = ""
         self.data_queue = queue.Queue()
+        self.export_queue = queue.Queue()
 
         # --- Main Layout ---
         main_frame = ttk.Frame(self.root, padding="10")
@@ -30,24 +31,39 @@ class DataFilterApp:
         self.file_label = ttk.Label(top_frame, text="未加载文件", width=50, wraplength=400)
         self.file_label.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
 
-        # --- Middle Frame for Column Selection ---
-        middle_frame = ttk.LabelFrame(main_frame, text="选择要筛选的列 (可多选)")
-        middle_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        # --- Paned Window for resizable layout ---
+        paned_window = ttk.PanedWindow(main_frame, orient=tk.HORIZONTAL)
+        paned_window.pack(fill=tk.BOTH, expand=True, pady=10)
 
-        # --- Listbox with Scrollbars ---
-        list_frame = ttk.Frame(middle_frame)
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # --- Left Pane: Column Selection ---
+        left_pane = ttk.LabelFrame(paned_window, text="选择列 (单击预览, Ctrl/Shift多选)")
+        paned_window.add(left_pane, weight=1)
 
-        self.column_listbox = tk.Listbox(list_frame, selectmode=tk.EXTENDED, exportselection=False)
-        
-        v_scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.column_listbox.yview)
-        h_scrollbar = ttk.Scrollbar(list_frame, orient=tk.HORIZONTAL, command=self.column_listbox.xview)
-        
+        self.column_listbox = tk.Listbox(left_pane, selectmode=tk.EXTENDED, exportselection=False)
+        v_scrollbar = ttk.Scrollbar(left_pane, orient=tk.VERTICAL, command=self.column_listbox.yview)
+        h_scrollbar = ttk.Scrollbar(left_pane, orient=tk.HORIZONTAL, command=self.column_listbox.xview)
         self.column_listbox.config(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        self.column_listbox.bind('<<ListboxSelect>>', self.update_data_preview)
 
         v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
         self.column_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # --- Right Pane: Data Preview ---
+        self.right_pane = ttk.LabelFrame(paned_window, text="数据预览")
+        paned_window.add(self.right_pane, weight=2)
+
+        self.data_preview_tree = ttk.Treeview(self.right_pane, columns=('Index', 'Value'), show='headings')
+        self.data_preview_tree.heading('Index', text='行号')
+        self.data_preview_tree.heading('Value', text='值')
+        self.data_preview_tree.column('Index', width=80, anchor='center')
+        self.data_preview_tree.column('Value', width=300)
+
+        tree_scrollbar = ttk.Scrollbar(self.right_pane, orient=tk.VERTICAL, command=self.data_preview_tree.yview)
+        self.data_preview_tree.config(yscrollcommand=tree_scrollbar.set)
+
+        tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.data_preview_tree.pack(fill=tk.BOTH, expand=True)
 
         # --- Advanced Filter Frame ---
         adv_filter_frame = ttk.LabelFrame(main_frame, text="高级筛选")
@@ -178,6 +194,7 @@ class DataFilterApp:
     def populate_column_listbox(self):
         """Clears and fills the column listbox with columns from the dataframe."""
         self.column_listbox.delete(0, tk.END) # Clear existing items
+        self.data_preview_tree.delete(*self.data_preview_tree.get_children()) # Clear preview
         if self.df is not None:
             for col in self.df.columns:
                 self.column_listbox.insert(tk.END, col)
@@ -204,6 +221,7 @@ class DataFilterApp:
         removed_count = initial_count - final_count
         
         self.update_status_bar()
+        self.update_data_preview() # Refresh the preview
         messagebox.showinfo("筛选完成", f"操作完成。\n\n移除了 {removed_count} 条记录。\n剩余记录数: {final_count}")
 
     def on_adv_col_selected(self, event=None):
@@ -277,10 +295,45 @@ class DataFilterApp:
             final_count = len(self.df)
             removed_count = initial_count - final_count
             self.update_status_bar()
+            self.update_data_preview() # Refresh the preview
             messagebox.showinfo("筛选完成", f"高级筛选完成。\n\n移除了 {removed_count} 条记录。\n剩余记录数: {final_count}")
 
         except Exception as e:
             messagebox.showerror("筛选失败", f"应用筛选时发生错误:\n{e}")
+
+    def update_data_preview(self, event=None):
+        """Updates the treeview with data from the selected column."""
+        if not self.column_listbox.curselection():
+            return
+            
+        # Clear previous preview
+        self.data_preview_tree.delete(*self.data_preview_tree.get_children())
+
+        # Get selected column (only preview the first selected item)
+        selected_index = self.column_listbox.curselection()[0]
+        selected_col = self.column_listbox.get(selected_index)
+
+        if self.df is None or selected_col not in self.df.columns:
+            return
+
+        # --- New: Link preview selection to advanced filter & show dtype ---
+        self.adv_filter_col.set(selected_col)
+        self.on_adv_col_selected() # Manually trigger the logic to update operators/values
+        
+        col_dtype = self.df[selected_col].dtype
+        self.right_pane.config(text=f"预览: {selected_col} - 类型: {col_dtype}")
+        # ----------------------------------------------------------------
+
+        # Display all rows
+        preview_df = self.df[[selected_col]]
+        
+        for index, row in preview_df.iterrows():
+            value = row[selected_col]
+            if pd.isna(value):
+                display_value = "(空值)"
+            else:
+                display_value = str(value)
+            self.data_preview_tree.insert("", "end", values=(index, display_value))
 
     def reset_data(self):
         """Resets the dataframe to its original state after loading."""
@@ -290,64 +343,169 @@ class DataFilterApp:
         
         self.df = self.original_df.copy()
         self.update_status_bar()
+        self.update_data_preview() # Refresh the preview
         messagebox.showinfo("重置成功", "数据已恢复到初始加载状态。")
 
     def open_export_window(self):
         if self.df is None:
             messagebox.showwarning("无数据", "请先加载并筛选数据。")
             return
-        ExportWindow(self.root, self.df)
+        # Pass the main app instance (self) to the dialog
+        dialog = ExportDialog(self.root, self, self.df.columns)
+        self.root.wait_window(dialog) # Wait until the dialog is closed
 
-
-class ExportWindow(tk.Toplevel):
-    def __init__(self, parent, df):
-        super().__init__(parent)
-        self.title("导出数据并重命名列")
-        self.geometry("600x400")
-        self.df = df
-        self.entries = {}
-
-        # --- Main Frame with Canvas for scrolling ---
-        main_frame = ttk.Frame(self)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-
-        canvas = tk.Canvas(main_frame)
-        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
-
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        # --- Populate with column names and entry boxes ---
-        ttk.Label(scrollable_frame, text="原始列名", font=('Helvetica', 10, 'bold')).grid(row=0, column=0, padx=5, pady=5, sticky='w')
-        ttk.Label(scrollable_frame, text="新列名 (留空则不更改)", font=('Helvetica', 10, 'bold')).grid(row=0, column=1, padx=5, pady=5, sticky='w')
-
-        for i, col in enumerate(self.df.columns, start=1):
-            ttk.Label(scrollable_frame, text=col).grid(row=i, column=0, padx=5, pady=2, sticky='w')
-            entry = ttk.Entry(scrollable_frame, width=30)
-            entry.grid(row=i, column=1, padx=5, pady=2, sticky='w')
-            self.entries[col] = entry
-
-        # --- Bottom frame for action buttons ---
-        bottom_frame = ttk.Frame(self)
-        bottom_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=5)
+    def start_export_thread(self, df_to_export, save_path):
+        """Starts the file exporting process in a background thread."""
+        self.status_bar.config(text=f"正在后台导出: {os.path.basename(save_path)}...")
         
-        ttk.Button(bottom_frame, text="确认并导出", command=self.export_data).pack(side=tk.RIGHT, padx=10)
-        ttk.Button(bottom_frame, text="取消", command=self.destroy).pack(side=tk.RIGHT)
+        thread = threading.Thread(target=self.data_exporter_worker, args=(df_to_export, save_path))
+        thread.daemon = True
+        thread.start()
+        
+        self.root.after(100, self.check_export_queue)
 
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+    def data_exporter_worker(self, df, path):
+        """Worker function to save data to a file."""
+        try:
+            if path.lower().endswith('.dta'):
+                df.to_stata(path, write_index=False, version=118)
+            else: # Default to CSV
+                df.to_csv(path, index=False)
+            self.export_queue.put(("success", path))
+        except Exception as e:
+            self.export_queue.put(("error", str(e)))
 
-    def export_data(self):
-        rename_map = {orig_col: entry.get() for orig_col, entry in self.entries.items() if entry.get()}
+    def check_export_queue(self):
+        """Checks the queue for export status and shows a message."""
+        try:
+            status, data = self.export_queue.get_nowait()
+            if status == "success":
+                messagebox.showinfo("导出成功", f"文件已成功保存到:\n{data}")
+            elif status == "error":
+                messagebox.showerror("导出失败", f"导出时发生错误:\n{data}")
+            
+            self.update_status_bar() # Reset status bar text
+
+        except queue.Empty:
+            self.root.after(100, self.check_export_queue)
+
+
+class ExportDialog(tk.Toplevel):
+    def __init__(self, parent, app_instance, columns):
+        super().__init__(parent)
+        self.app = app_instance
+        self.title("导出数据并重命名列 (双击'新列名'单元格进行编辑)")
+        self.geometry("700x550")
+        self.transient(parent)
+        self.grab_set()
+
+        self.columns = columns
+        self.temp_entry = None
+        self.editing_item_id = None # Store the ID of the item being edited
+
+        # --- Top Button Frame ---
+        top_btn_frame = ttk.Frame(self)
+        top_btn_frame.pack(fill='x', padx=10, pady=5)
+        ttk.Button(top_btn_frame, text="全部填充", command=self.fill_all).pack(side='left')
+        ttk.Button(top_btn_frame, text="全部清空", command=self.clear_all).pack(side='left', padx=5)
+
+        # --- Treeview Frame ---
+        tree_frame = ttk.Frame(self)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        self.tree = ttk.Treeview(tree_frame, columns=('Original', 'New'), show='headings')
+        self.tree.heading('Original', text='原始列名')
+        self.tree.heading('New', text='新列名 (留空则不修改)')
+        self.tree.column('Original', width=250)
+        self.tree.column('New', width=250)
+
+        for col in self.columns:
+            self.tree.insert('', 'end', values=(col, ''))
+
+        # --- Scrollbar ---
+        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side='right', fill='y')
+        self.tree.pack(side='left', fill='both', expand=True)
+
+        # --- Bindings ---
+        self.tree.bind('<Double-1>', self.on_double_click)
+
+        # --- Bottom Buttons ---
+        bottom_btn_frame = ttk.Frame(self)
+        bottom_btn_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Button(bottom_btn_frame, text="取消", command=self.destroy).pack(side='right', padx=5)
+        ttk.Button(bottom_btn_frame, text="确认并导出", command=self.confirm_export).pack(side='right')
+
+    def on_double_click(self, event):
+        self.save_temp_entry() # Save any previously active entry
+        
+        region = self.tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+
+        column_id = self.tree.identify_column(event.x)
+        if column_id != '#2': # Only allow editing the 'New' column
+            return
+
+        self.editing_item_id = self.tree.identify_row(event.y)
+        if not self.editing_item_id:
+            return
+        
+        x, y, width, height = self.tree.bbox(self.editing_item_id, column_id)
+
+        self.temp_entry = ttk.Entry(self.tree, justify='left')
+        self.temp_entry.place(x=x, y=y, width=width, height=height)
+        
+        current_value = self.tree.item(self.editing_item_id, 'values')[1]
+        self.temp_entry.insert(0, current_value)
+        self.temp_entry.focus_force()
+
+        self.temp_entry.bind('<Return>', self.save_temp_entry)
+        self.temp_entry.bind('<FocusOut>', self.save_temp_entry)
+        self.temp_entry.bind('<Escape>', self.cancel_edit)
+
+    def save_temp_entry(self, event=None):
+        if self.temp_entry and self.editing_item_id:
+            new_value = self.temp_entry.get()
+            current_values = self.tree.item(self.editing_item_id, 'values')
+            self.tree.item(self.editing_item_id, values=(current_values[0], new_value))
+        
+        self.destroy_temp_entry()
+
+    def cancel_edit(self, event=None):
+        self.destroy_temp_entry()
+
+    def destroy_temp_entry(self):
+        if self.temp_entry:
+            self.temp_entry.destroy()
+            self.temp_entry = None
+            self.editing_item_id = None
+
+    def fill_all(self):
+        self.save_temp_entry()
+        for item_id in self.tree.get_children():
+            values = self.tree.item(item_id, 'values')
+            self.tree.item(item_id, values=(values[0], values[0]))
+
+    def clear_all(self):
+        self.save_temp_entry()
+        for item_id in self.tree.get_children():
+            values = self.tree.item(item_id, 'values')
+            self.tree.item(item_id, values=(values[0], ''))
+
+    def confirm_export(self):
+        self.save_temp_entry()
+        rename_map = {}
+        for item_id in self.tree.get_children():
+            old_name, new_name = self.tree.item(item_id, 'values')
+            new_name = str(new_name).strip()
+            if new_name:
+                rename_map[old_name] = new_name
         
         try:
-            df_to_export = self.df.rename(columns=rename_map)
+            df_to_export = self.app.df.rename(columns=rename_map)
             
             save_path = filedialog.asksaveasfilename(
                 title="保存文件",
@@ -363,11 +521,11 @@ class ExportWindow(tk.Toplevel):
             else:
                 df_to_export.to_csv(save_path, index=False)
             
-            messagebox.showinfo("导出成功", f"文件已成功保存到:\n{save_path}")
+            messagebox.showinfo("导出成功", f"文件已成功保存到:\n{save_path}", parent=self)
             self.destroy()
 
         except Exception as e:
-            messagebox.showerror("导出失败", f"导出时发生错误:\n{e}")
+            messagebox.showerror("导出失败", f"导出时发生错误:\n{e}", parent=self)
 
 
 if __name__ == "__main__":
